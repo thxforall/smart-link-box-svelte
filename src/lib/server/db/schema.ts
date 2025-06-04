@@ -1,20 +1,22 @@
-import { pgTable, serial, integer, text, timestamp } from 'drizzle-orm/pg-core';
+export type Link = {
+	id: string;
+	user_id: string;
+	url: string;
+	title: string | null;
+	summary: string | null;
+	category: string | null;
+	created_at: string;
+	updated_at: string;
+};
 
-export const user = pgTable('user', {
-	id: text('id').primaryKey(),
-	age: integer('age'),
-	username: text('username').notNull().unique(),
-	passwordHash: text('password_hash').notNull()
-});
+export type User = {
+	id: string;
+	email: string;
+	created_at: string;
+};
 
-export const session = pgTable('session', {
-	id: text('id').primaryKey(),
-	userId: text('user_id')
-		.notNull()
-		.references(() => user.id),
-	expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull()
-});
-
-export type Session = typeof session.$inferSelect;
-
-export type User = typeof user.$inferSelect;
+export type Session = {
+	id: string;
+	user_id: string;
+	expires_at: string;
+};

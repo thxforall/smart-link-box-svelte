@@ -1,2 +1,10 @@
-<h1>Welcome to SvelteKit</h1>
-<p>Visit <a href="https://svelte.dev/docs/kit">svelte.dev/docs/kit</a> to read the documentation</p>
+<!-- Main landing page -->
+<script lang="ts">
+  import Hero from '$lib/components/home/Hero.svelte';
+  import Features from '$lib/components/home/Features.svelte';
+</script>
+
+<div class="min-h-screen bg-gradient-to-b from-white to-gray-100">
+  <Hero />
+  <Features />
+</div>
