@@ -1,13 +1,24 @@
 import type { RequestEvent } from '@sveltejs/kit';
-import { eq } from 'drizzle-orm';
 import { sha256 } from '@oslojs/crypto/sha2';
 import { encodeBase64url, encodeHexLowerCase } from '@oslojs/encoding';
-import { db } from '$lib/server/db';
-import * as table from '$lib/server/db/schema';
+import { supabaseAdmin } from '$lib/server/db';
+import type { Session } from '$lib/server/db/schema';
+import type { PostgrestError } from '@supabase/supabase-js';
 
 const DAY_IN_MS = 1000 * 60 * 60 * 24;
 
 export const sessionCookieName = 'auth-session';
+
+type SessionWithUser = {
+	id: string;
+	user_id: string;
+	expires_at: string;
+	created_at: string;
+	users: {
+		id: string;
+		email: string;
+	};
+};
 
 export function generateSessionToken() {
 	const bytes = crypto.getRandomValues(new Uint8Array(18));
@@ -17,45 +28,74 @@ export function generateSessionToken() {
 
 export async function createSession(token: string, userId: string) {
 	const sessionId = encodeHexLowerCase(sha256(new TextEncoder().encode(token)));
-	const session: table.Session = {
+	const session: Session = {
 		id: sessionId,
-		userId,
-		expiresAt: new Date(Date.now() + DAY_IN_MS * 30)
+		user_id: userId,
+		expires_at: new Date(Date.now() + DAY_IN_MS * 30).toISOString(),
+		created_at: new Date().toISOString()
 	};
-	await db.insert(table.session).values(session);
+	
+	const { error } = await supabaseAdmin
+		.from('sessions')
+		.insert(session);
+	
+	if (error) throw error;
 	return session;
 }
 
 export async function validateSessionToken(token: string) {
 	const sessionId = encodeHexLowerCase(sha256(new TextEncoder().encode(token)));
-	const [result] = await db
-		.select({
-			// Adjust user table here to tweak returned data
-			user: { id: table.user.id, username: table.user.username },
-			session: table.session
-		})
-		.from(table.session)
-		.innerJoin(table.user, eq(table.session.userId, table.user.id))
-		.where(eq(table.session.id, sessionId));
+	
+	const { data, error } = await supabaseAdmin
+		.from('sessions')
+		.select(`
+			id,
+			user_id,
+			expires_at,
+			created_at,
+			users!inner (
+				id,
+				email
+			)
+		`)
+		.eq('id', sessionId)
+		.single() as { data: SessionWithUser | null; error: PostgrestError | null };
 
-	if (!result) {
+	if (error || !data) {
 		return { session: null, user: null };
 	}
-	const { session, user } = result;
 
-	const sessionExpired = Date.now() >= session.expiresAt.getTime();
+	const session = {
+		id: data.id,
+		user_id: data.user_id,
+		expires_at: new Date(data.expires_at),
+		created_at: new Date(data.created_at)
+	};
+
+	const user = {
+		id: data.users.id,
+		email: data.users.email
+	};
+
+	const sessionExpired = Date.now() >= session.expires_at.getTime();
 	if (sessionExpired) {
-		await db.delete(table.session).where(eq(table.session.id, session.id));
+		await supabaseAdmin
+			.from('sessions')
+			.delete()
+			.eq('id', session.id);
 		return { session: null, user: null };
 	}
 
-	const renewSession = Date.now() >= session.expiresAt.getTime() - DAY_IN_MS * 15;
+	const renewSession = Date.now() >= session.expires_at.getTime() - DAY_IN_MS * 15;
 	if (renewSession) {
-		session.expiresAt = new Date(Date.now() + DAY_IN_MS * 30);
-		await db
-			.update(table.session)
-			.set({ expiresAt: session.expiresAt })
-			.where(eq(table.session.id, session.id));
+		const newExpiresAt = new Date(Date.now() + DAY_IN_MS * 30);
+		const { error: updateError } = await supabaseAdmin
+			.from('sessions')
+			.update({ expires_at: newExpiresAt.toISOString() })
+			.eq('id', session.id);
+		
+		if (updateError) throw updateError;
+		session.expires_at = newExpiresAt;
 	}
 
 	return { session, user };
@@ -64,7 +104,12 @@ export async function validateSessionToken(token: string) {
 export type SessionValidationResult = Awaited<ReturnType<typeof validateSessionToken>>;
 
 export async function invalidateSession(sessionId: string) {
-	await db.delete(table.session).where(eq(table.session.id, sessionId));
+	const { error } = await supabaseAdmin
+		.from('sessions')
+		.delete()
+		.eq('id', sessionId);
+	
+	if (error) throw error;
 }
 
 export function setSessionTokenCookie(event: RequestEvent, token: string, expiresAt: Date) {
